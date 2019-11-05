@@ -321,7 +321,7 @@ def load_embedding(embedding_path):
                 continue
                 tokens = line.split()
                 if embedd_dim < 0:
-                    embedd_dim = len(tokens) - 1 #BECAUSE THE ZEROTH INDEX IS OCCUPIED BY THE WORD
+                    embedd_dim = len(tokens) - 1  # BECAUSE THE ZEROTH INDEX IS OCCUPIED BY THE WORD
                 else:
                     assert (embedd_dim + 1 == len(tokens))
                 embedd = np.empty([1, embedd_dim], dtype=np.float64)
@@ -329,9 +329,10 @@ def load_embedding(embedding_path):
                 embedd_dict[tokens[0]] = embedd
         return embedd_dict
 
+
 def build_embedd_table(word_alphabet, embedd_dict, embedd_dim=100, caseless=True):
     scale = np.sqrt(3.0 / embedd_dim)
-    #TODO:should we build an embedding table with words in our training/dev/test plus glove .
+    # TODO:should we build an embedding table with words in our training/dev/test plus glove .
     # the extra words in glove will not be trained but can help with UNK
     embedd_table = np.empty([word_alphabet.size(), embedd_dim], dtype=np.float64)
     embedd_table[word_alphabet.default_index, :] = np.random.uniform(-scale, scale, [1, embedd_dim])
