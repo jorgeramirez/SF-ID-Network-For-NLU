@@ -7,7 +7,7 @@ import numpy as np
 from tensorflow.contrib.rnn.python.ops import core_rnn_cell
 from tensorflow.python.ops import rnn_cell_impl
 
-from utils import createVocabulary, loadVocabulary, computeF1Score, DataProcessor
+from utils import createVocabulary, loadVocabulary, computeF1Score, DataProcessor, load_embedding
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
@@ -45,17 +45,17 @@ parser.add_argument("--intent_file", type=str, default='label', help="Intent fil
 parser.add_argument("--embedding_path", type=str, default='', help="embedding array's path.")
 
 arg = parser.parse_args()
-if arg.dataset=='atis':
-    arg.model_type='intent_only'
+if arg.dataset == 'atis':
+    arg.model_type = 'intent_only'
 else:
-    arg.model_type='full'
+    arg.model_type = 'full'
 
 for k, v in sorted(vars(arg).items()):
     print(k, '=', v)
 print()
 
 if arg.model_type == 'full':
-    remove_slot_attn = False 
+    remove_slot_attn = False
 elif arg.model_type == 'intent_only':
     remove_slot_attn = True
 else:
@@ -96,7 +96,8 @@ def createModel(input_data, input_size, sequence_length, slots, slot_size, inten
         cell_bw = tf.contrib.rnn.DropoutWrapper(cell_bw, input_keep_prob=0.5,
                                                 output_keep_prob=0.5)
     if arg.embedding_path:
-        embedding_weight = np.load(arg.embedding_path)
+        #embedding_weight = np.load(arg.embedding_path)
+        embedding_weight = load_embedding(arg.embedding_path)
         embedding = tf.Variable(embedding_weight, name='embedding', dtype=tf.float32)
     else:
         embedding = tf.get_variable('embedding', [input_size, layer_size])
@@ -132,7 +133,7 @@ def createModel(input_data, input_size, sequence_length, slots, slot_size, inten
                 slot_reinforce_state = tf.expand_dims(slot_d, 2)
         else:
             attn_size = state_shape[2].value
-            slot_d=slot_inputs
+            slot_d = slot_inputs
             slot_reinforce_state = tf.expand_dims(slot_inputs, 2)
             slot_inputs = tf.reshape(slot_inputs, [-1, attn_size])
 
@@ -150,7 +151,7 @@ def createModel(input_data, input_size, sequence_length, slots, slot_size, inten
             a = tf.nn.softmax(s)
             a = tf.expand_dims(a, -1)
             a = tf.expand_dims(a, -1)
-            d = tf.reduce_sum(a * hidden, [1, 2]) 
+            d = tf.reduce_sum(a * hidden, [1, 2])
             r_intent = d
             intent_context_states = d
 
@@ -365,7 +366,6 @@ with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
             save_path = os.path.join(arg.model_path, '_step_' + str(step) + '_epochs_' + str(epochs) + '.ckpt')
             saver.save(sess, save_path)
 
-
             def valid(in_path, slot_path, intent_path):
                 data_processor_valid = DataProcessor(in_path, slot_path, intent_path, in_vocab, slot_vocab,
                                                      intent_vocab)
@@ -438,7 +438,6 @@ with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
 
                 data_processor_valid.close()
                 return f1, accuracy, semantic_acc, pred_intents, correct_intents, slot_outputs, correct_slots, input_words, gate_seq
-
 
             logging.info('Valid:')
             epoch_valid_slot, epoch_valid_intent, epoch_valid_err, valid_pred_intent, valid_correct_intent, valid_pred_slot, valid_correct_slot, valid_words, valid_gate = valid(
