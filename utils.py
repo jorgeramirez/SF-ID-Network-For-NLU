@@ -331,13 +331,13 @@ def load_embedding(embedding_path):
         return embedd_dict
 
 
-def build_embedd_table(word_alphabet, embedd_dict, embedd_dim=100, caseless=True):
+def build_embedd_table(word_alphabet, embedd_dict, embedd_dim=64, caseless=True):
     scale = np.sqrt(3.0 / embedd_dim)
     # TODO:should we build an embedding table with words in our training/dev/test plus glove .
     # the extra words in glove will not be trained but can help with UNK
-    embedd_table = np.empty([word_alphabet.size(), embedd_dim], dtype=np.float64)
-    embedd_table[word_alphabet.default_index, :] = np.random.uniform(-scale, scale, [1, embedd_dim])
-    for word, index in word_alphabet.items():
+    embedd_table = np.empty([word_alphabet.size, embedd_dim], dtype=np.float32)
+    embedd_table[:] = np.random.uniform(-scale, scale, [1, embedd_dim])
+    for index, word in np.ndenumerate(word_alphabet):
         ww = word.lower() if caseless else word
         embedd = embedd_dict[ww] if ww in embedd_dict else np.random.uniform(-scale, scale, [1, embedd_dim])
         embedd_table[index, :] = embedd

@@ -7,9 +7,9 @@ import numpy as np
 from tensorflow.contrib.rnn.python.ops import core_rnn_cell
 from tensorflow.python.ops import rnn_cell_impl
 
-from utils import createVocabulary, loadVocabulary, computeF1Score, DataProcessor, load_embedding
+from utils import createVocabulary, loadVocabulary, computeF1Score, DataProcessor, load_embedding, build_embedd_table
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 parser = argparse.ArgumentParser(allow_abbrev=False)
 parser.add_argument("--num_units", type=int, default=64, help="Network size.", dest='layer_size')
@@ -43,6 +43,7 @@ parser.add_argument("--input_file", type=str, default='seq.in', help="Input file
 parser.add_argument("--slot_file", type=str, default='seq.out', help="Slot file name.")
 parser.add_argument("--intent_file", type=str, default='label', help="Intent file name.")
 parser.add_argument("--embedding_path", type=str, default='', help="embedding array's path.")
+parser.add_argument("--embed_dim", type=int, default=64, help="Embedding dim.", dest='embed_dim')
 
 arg = parser.parse_args()
 if arg.dataset == 'atis':
@@ -84,9 +85,23 @@ in_vocab = loadVocabulary(os.path.join(arg.vocab_path, 'in_vocab'))
 slot_vocab = loadVocabulary(os.path.join(arg.vocab_path, 'slot_vocab'))
 intent_vocab = loadVocabulary(os.path.join(arg.vocab_path, 'intent_vocab'))
 
+# in_vocab valid
+createVocabulary(os.path.join(full_valid_path, arg.input_file), os.path.join(arg.vocab_path, 'in_vocab_valid'))
+in_vocab_valid = loadVocabulary(os.path.join(arg.vocab_path, 'in_vocab_valid'))
 
-def createModel(input_data, input_size, sequence_length, slots, slot_size, intent_size, layer_size=128,
-                isTraining=True):
+# in_vocab test
+createVocabulary(os.path.join(full_test_path, arg.input_file), os.path.join(arg.vocab_path, 'in_vocab_test'))
+in_vocab_test = loadVocabulary(os.path.join(arg.vocab_path, 'in_vocab_test'))
+
+
+def create_full_vocabulary():
+    # {'vocab': {'_PAD': 0, '_UNK': 1, 'to': 2, 'from': 3}, 'rev': ['_PAD', '_UNK', 'to', 'from']}
+    word_alphabet = in_vocab["rev"]
+    return np.array(word_alphabet)
+
+
+def createModel(input_data, in_vocabulary_size, sequence_length, slots, slot_size, intent_size, layer_size=128,
+                isTraining=True, embed_dim=64):
     cell_fw = tf.contrib.rnn.BasicLSTMCell(layer_size)
     cell_bw = tf.contrib.rnn.BasicLSTMCell(layer_size)
 
@@ -96,11 +111,15 @@ def createModel(input_data, input_size, sequence_length, slots, slot_size, inten
         cell_bw = tf.contrib.rnn.DropoutWrapper(cell_bw, input_keep_prob=0.5,
                                                 output_keep_prob=0.5)
     if arg.embedding_path:
-        #embedding_weight = np.load(arg.embedding_path)
-        embedding_weight = load_embedding(arg.embedding_path)
-        embedding = tf.Variable(embedding_weight, name='embedding', dtype=tf.float32)
+        embeddings_dict = load_embedding(arg.embedding_path)
+        word_alphabet = create_full_vocabulary()
+        embeddings_weight = build_embedd_table(word_alphabet, embeddings_dict, embedd_dim=embed_dim, caseless=True)
+        embedding = tf.get_variable(name="embedding", shape=embeddings_weight.shape,
+                                    initializer=tf.constant_initializer(embeddings_weight),
+                                    trainable=False)
     else:
-        embedding = tf.get_variable('embedding', [input_size, layer_size])
+        embedding = tf.get_variable('embedding', [in_vocabulary_size, embed_dim])
+    print("embedding shape", embedding.shape)
     inputs = tf.nn.embedding_lookup(embedding, input_data)
     state_outputs, final_state = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, inputs,
                                                                  sequence_length=sequence_length, dtype=tf.float32)
@@ -244,7 +263,7 @@ intent = tf.placeholder(tf.int32, [None], name='intent')
 
 with tf.variable_scope('model'):
     training_outputs = createModel(input_data, len(in_vocab['vocab']), sequence_length, slots, len(slot_vocab['vocab']),
-                                   len(intent_vocab['vocab']), layer_size=arg.layer_size)
+                                   len(intent_vocab['vocab']), layer_size=arg.layer_size, embed_dim=arg.embed_dim)
 
 slots_shape = tf.shape(slots)
 slots_reshape = tf.reshape(slots, [-1])
@@ -298,8 +317,8 @@ inputs = [input_data, sequence_length, slots, slot_weights, intent]
 
 with tf.variable_scope('model', reuse=True):
     inference_outputs = createModel(input_data, len(in_vocab['vocab']), sequence_length, slots,
-                                    len(slot_vocab['vocab']),
-                                    len(intent_vocab['vocab']), layer_size=arg.layer_size, isTraining=False)
+                                    len(slot_vocab['vocab']), len(intent_vocab['vocab']),
+                                    layer_size=arg.layer_size, isTraining=False, embed_dim=arg.embed_dim)
 
 if arg.use_crf:
     inference_slot_output, pred_scores = tf.contrib.crf.crf_decode(inference_outputs[0], trans_params, sequence_length)
@@ -341,6 +360,7 @@ with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
                                            os.path.join(full_train_path, arg.slot_file),
                                            os.path.join(full_train_path, arg.intent_file), in_vocab, slot_vocab,
                                            intent_vocab)
+
         in_data, slot_data, slot_weight, length, intents, _, _, _ = data_processor.get_batch(arg.batch_size)
         feed_dict = {input_data.name: in_data, slots.name: slot_data, slot_weights.name: slot_weight,
                      sequence_length.name: length, intent.name: intents}
