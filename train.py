@@ -85,14 +85,6 @@ in_vocab = loadVocabulary(os.path.join(arg.vocab_path, 'in_vocab'))
 slot_vocab = loadVocabulary(os.path.join(arg.vocab_path, 'slot_vocab'))
 intent_vocab = loadVocabulary(os.path.join(arg.vocab_path, 'intent_vocab'))
 
-# in_vocab valid
-createVocabulary(os.path.join(full_valid_path, arg.input_file), os.path.join(arg.vocab_path, 'in_vocab_valid'))
-in_vocab_valid = loadVocabulary(os.path.join(arg.vocab_path, 'in_vocab_valid'))
-
-# in_vocab test
-createVocabulary(os.path.join(full_test_path, arg.input_file), os.path.join(arg.vocab_path, 'in_vocab_test'))
-in_vocab_test = loadVocabulary(os.path.join(arg.vocab_path, 'in_vocab_test'))
-
 
 def create_full_vocabulary():
     # {'vocab': {'_PAD': 0, '_UNK': 1, 'to': 2, 'from': 3}, 'rev': ['_PAD', '_UNK', 'to', 'from']}
