@@ -1,5 +1,6 @@
 import numpy as np
 import gzip
+import tensorflow as tf
 
 
 def createVocabulary(input_path, output_path, no_pad=False, no_unk=False):
@@ -26,9 +27,9 @@ def createVocabulary(input_path, output_path, no_pad=False, no_unk=False):
                 else:
                     vocab[w] = 1
         if no_pad == False:
-            vocab = ['_PAD', '_UNK'] + sorted(vocab, key=vocab.get, reverse=True)
+            vocab = ['_PAD', '_UNK', '[CLS]', '[SEP]'] + sorted(vocab, key=vocab.get, reverse=True)
         else:
-            vocab = ['_UNK'] + sorted(vocab, key=vocab.get, reverse=True)
+            vocab = ['_UNK', '[CLS]', '[SEP]'] + sorted(vocab, key=vocab.get, reverse=True)
         for v in vocab:
             out.write(v + '\n')
 
@@ -221,14 +222,19 @@ def computeF1Score(correct_slots, pred_slots):
     return f1, precision, recall
 
 
+def bert_sentence_wrap(s):
+    return "[CLS] " + s + " [SEP]"
+
+
 class DataProcessor(object):
-    def __init__(self, in_path, slot_path, intent_path, in_vocab, slot_vocab, intent_vocab):
+    def __init__(self, in_path, slot_path, intent_path, in_vocab, slot_vocab, intent_vocab, use_bert=False):
         self.__fd_in = open(in_path, 'r')
         self.__fd_slot = open(slot_path, 'r')
         self.__fd_intent = open(intent_path, 'r')
         self.__in_vocab = in_vocab
         self.__slot_vocab = slot_vocab
         self.__intent_vocab = intent_vocab
+        self.__use_bert = use_bert
         self.end = 0
 
     def close(self):
@@ -265,6 +271,10 @@ class DataProcessor(object):
             in_seq.append(inp)
             slot_seq.append(slot)
             intent_seq.append(intent)
+
+            if self.__use_bert:
+                inp = bert_sentence_wrap(inp)
+                slot = bert_sentence_wrap(slot)
 
             iii = inp
             sss = slot

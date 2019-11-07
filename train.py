@@ -6,6 +6,7 @@ import tensorflow as tf
 import numpy as np
 from tensorflow.contrib.rnn.python.ops import core_rnn_cell
 from tensorflow.python.ops import rnn_cell_impl
+import pandas as pd
 
 from utils import createVocabulary, loadVocabulary, computeF1Score, DataProcessor, load_embedding, build_embedd_table
 
@@ -44,6 +45,7 @@ parser.add_argument("--slot_file", type=str, default='seq.out', help="Slot file 
 parser.add_argument("--intent_file", type=str, default='label', help="Intent file name.")
 parser.add_argument("--embedding_path", type=str, default='', help="embedding array's path.")
 parser.add_argument("--embed_dim", type=int, default=64, help="Embedding dim.", dest='embed_dim')
+parser.add_argument("--use_bert", type=bool, default=False, help="Use BERT embeddings.", dest='use_bert')
 
 arg = parser.parse_args()
 if arg.dataset == 'atis':
@@ -102,17 +104,23 @@ def createModel(input_data, in_vocabulary_size, sequence_length, slots, slot_siz
                                                 output_keep_prob=0.5)
         cell_bw = tf.contrib.rnn.DropoutWrapper(cell_bw, input_keep_prob=0.5,
                                                 output_keep_prob=0.5)
-    if arg.embedding_path:
-        embeddings_dict = load_embedding(arg.embedding_path)
-        word_alphabet = create_full_vocabulary()
-        embeddings_weight = build_embedd_table(word_alphabet, embeddings_dict, embedd_dim=embed_dim, caseless=True)
-        embedding = tf.get_variable(name="embedding", shape=embeddings_weight.shape,
-                                    initializer=tf.constant_initializer(embeddings_weight),
-                                    trainable=True)
+
+    if arg.use_bert:
+        # we already have the embeddings in this case
+        inputs = input_data
     else:
-        embedding = tf.get_variable('embedding', [in_vocabulary_size, embed_dim])
-    print("embedding shape", embedding.shape)
-    inputs = tf.nn.embedding_lookup(embedding, input_data)
+        if arg.embedding_path:
+            embeddings_dict = load_embedding(arg.embedding_path)
+            word_alphabet = create_full_vocabulary()
+            embeddings_weight = build_embedd_table(word_alphabet, embeddings_dict, embedd_dim=embed_dim, caseless=True)
+            embedding = tf.get_variable(name="embedding", shape=embeddings_weight.shape,
+                                        initializer=tf.constant_initializer(embeddings_weight),
+                                        trainable=True)
+        else:
+            embedding = tf.get_variable('embedding', [in_vocabulary_size, embed_dim])
+        print("embedding shape", embedding.shape)
+        inputs = tf.nn.embedding_lookup(embedding, input_data)
+
     state_outputs, final_state = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, inputs,
                                                                  sequence_length=sequence_length, dtype=tf.float32)
     final_state = tf.concat([final_state[0][0], final_state[0][1], final_state[1][0], final_state[1][1]], 1)
@@ -247,6 +255,7 @@ def createModel(input_data, in_vocabulary_size, sequence_length, slots, slot_siz
 
 
 input_data = tf.placeholder(tf.int32, [None, None], name='inputs')
+input_sequence_embeddings = tf.placeholder(tf.float32, [None, None, arg.embed_dim], name='input_sequence_embeddings')
 sequence_length = tf.placeholder(tf.int32, [None], name="sequence_length")
 global_step = tf.Variable(0, trainable=False, name='global_step')
 slots = tf.placeholder(tf.int32, [None, None], name='slots')
@@ -254,7 +263,8 @@ slot_weights = tf.placeholder(tf.float32, [None, None], name='slot_weights')
 intent = tf.placeholder(tf.int32, [None], name='intent')
 
 with tf.variable_scope('model'):
-    training_outputs = createModel(input_data, len(in_vocab['vocab']), sequence_length, slots, len(slot_vocab['vocab']),
+    input_raw = input_sequence_embeddings if arg.use_bert else input_data
+    training_outputs = createModel(input_raw, len(in_vocab['vocab']), sequence_length, slots, len(slot_vocab['vocab']),
                                    len(intent_vocab['vocab']), layer_size=arg.layer_size, embed_dim=arg.embed_dim)
 
 slots_shape = tf.shape(slots)
@@ -308,7 +318,8 @@ inputs = [input_data, sequence_length, slots, slot_weights, intent]
 
 
 with tf.variable_scope('model', reuse=True):
-    inference_outputs = createModel(input_data, len(in_vocab['vocab']), sequence_length, slots,
+    input_raw = input_sequence_embeddings if arg.use_bert else input_data
+    inference_outputs = createModel(input_raw, len(in_vocab['vocab']), sequence_length, slots,
                                     len(slot_vocab['vocab']), len(intent_vocab['vocab']),
                                     layer_size=arg.layer_size, isTraining=False, embed_dim=arg.embed_dim)
 
@@ -326,6 +337,29 @@ logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=lo
 
 saver = tf.train.Saver()
 gpu_options = tf.GPUOptions(allow_growth=True)
+
+
+def save_current_results(epoch, records):
+    logging.info("Saving results of Epoch {}".format(str(epoch)))
+    columns = ["split", "step", "epochs", "eval_loss", "slot_f1", "intent_accuracy", "semantic_accuracy"]
+    df = pd.DataFrame(records, columns=columns)
+    df.to_csv("./training_output.csv", index=False)
+    logging.info("Results saved!")
+
+
+def get_bert_embeddings(in_seq):
+    input_seq_embeddings = bc.encode([s.split() for s in in_seq], is_tokenized=True).copy()
+    dims = input_seq_embeddings.shape
+
+    if dims[2] > arg.embed_dim:
+        # if bert-service concatenated multiple layers, we reduce them to arg.embed_dim by summing them up.
+        tmp_seq_embeddings = np.empty(shape=(dims[0], dims[1], arg.embed_dim))
+        for i in range(dims[0]):
+            for j in range(dims[1]):
+                tmp_seq_embeddings[i][j] = np.sum(input_seq_embeddings[i][j].reshape(-1, arg.embed_dim), axis=0)
+        input_seq_embeddings = tmp_seq_embeddings
+    return input_seq_embeddings
+
 
 with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
     sess.run(tf.global_variables_initializer())
@@ -346,22 +380,37 @@ with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
     valid_err = 0
     test_err = 0
     best_epoch_num = 0
+    eval_loss = 0.0
+
+    result_records = []
+
+    if arg.use_bert:
+        from bert_serving.client import BertClient
+        bc = BertClient()
+
     while True:
         if data_processor == None:
             data_processor = DataProcessor(os.path.join(full_train_path, arg.input_file),
                                            os.path.join(full_train_path, arg.slot_file),
                                            os.path.join(full_train_path, arg.intent_file), in_vocab, slot_vocab,
-                                           intent_vocab)
+                                           intent_vocab, use_bert=arg.use_bert)
 
-        in_data, slot_data, slot_weight, length, intents, _, _, _ = data_processor.get_batch(arg.batch_size)
+        in_data, slot_data, slot_weight, length, intents, input_seq, _, _ = data_processor.get_batch(arg.batch_size)
+        input_seq_embeddings = np.empty(shape=[0, 0, arg.embed_dim])
+
+        if arg.use_bert:
+            input_seq_embeddings = get_bert_embeddings(input_seq)
+
         feed_dict = {input_data.name: in_data, slots.name: slot_data, slot_weights.name: slot_weight,
-                     sequence_length.name: length, intent.name: intents}
+                     sequence_length.name: length, intent.name: intents,
+                     input_sequence_embeddings.name: input_seq_embeddings}
         ret = sess.run(training_outputs, feed_dict)
-        loss += np.mean(ret[1])
 
-        line += arg.batch_size
-        step = ret[0]
-        num_loss += 1
+        if len(in_data) != 0:
+            loss += np.mean(ret[1])
+            line += arg.batch_size
+            step = ret[0]
+            num_loss += 1
 
         if data_processor.end == 1:
             arg.batch_size += arg.batch_size_add
@@ -372,6 +421,7 @@ with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
             logging.info('Step: ' + str(step))
             logging.info('Epochs: ' + str(epochs))
             logging.info('Loss: ' + str(loss / num_loss))
+            eval_loss = loss / num_loss
             num_loss = 0
             loss = 0.0
 
@@ -380,7 +430,7 @@ with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
 
             def valid(in_path, slot_path, intent_path):
                 data_processor_valid = DataProcessor(in_path, slot_path, intent_path, in_vocab, slot_vocab,
-                                                     intent_vocab)
+                                                     intent_vocab, use_bert=arg.use_bert)
 
                 pred_intents = []
                 correct_intents = []
@@ -394,7 +444,13 @@ with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
                         arg.batch_size)
                     if len(in_data) <= 0:
                         break
-                    feed_dict = {input_data.name: in_data, sequence_length.name: length}
+
+                    input_seq_embeddings = np.empty(shape=[0, 0, arg.embed_dim])
+                    if arg.use_bert:
+                        input_seq_embeddings = get_bert_embeddings(in_seq)
+
+                    feed_dict = {input_data.name: in_data, sequence_length.name: length,
+                                 input_sequence_embeddings.name: input_seq_embeddings}
                     ret = sess.run(inference_outputs, feed_dict)
                     for i in ret[0]:
                         pred_intents.append(np.argmax(i))
@@ -456,10 +512,16 @@ with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
                 os.path.join(full_valid_path, arg.input_file), os.path.join(full_valid_path, arg.slot_file),
                 os.path.join(full_valid_path, arg.intent_file))
 
+            result_records.append(["valid", step, epochs, eval_loss, epoch_valid_slot, epoch_valid_intent, epoch_valid_err])
+
             logging.info('Test:')
             epoch_test_slot, epoch_test_intent, epoch_test_err, test_pred_intent, test_correct_intent, test_pred_slot, test_correct_slot, test_words, test_gate = valid(
                 os.path.join(full_test_path, arg.input_file), os.path.join(full_test_path, arg.slot_file),
                 os.path.join(full_test_path, arg.intent_file))
+
+            result_records.append(["test", step, epochs, -1, epoch_test_slot, epoch_test_intent, epoch_test_err])
+
+            save_current_results(epochs, result_records)
 
             if epoch_test_err <= test_err:
                 no_improve += 1

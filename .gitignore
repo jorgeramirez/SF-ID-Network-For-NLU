@@ -3,3 +3,4 @@ vocab/in_vocab
 vocab/intent_vocab
 vocab/slot_vocab
 vocab/*
+training_output.csv
