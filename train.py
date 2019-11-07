@@ -108,7 +108,7 @@ def createModel(input_data, in_vocabulary_size, sequence_length, slots, slot_siz
         embeddings_weight = build_embedd_table(word_alphabet, embeddings_dict, embedd_dim=embed_dim, caseless=True)
         embedding = tf.get_variable(name="embedding", shape=embeddings_weight.shape,
                                     initializer=tf.constant_initializer(embeddings_weight),
-                                    trainable=False)
+                                    trainable=True)
     else:
         embedding = tf.get_variable('embedding', [in_vocabulary_size, embed_dim])
     print("embedding shape", embedding.shape)
